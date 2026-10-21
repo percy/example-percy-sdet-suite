@@ -78,6 +78,9 @@ deploy() {
 
 cmd_nightly() {
   load_env; [ -n "${PERCY_TOKEN:-}" ] || die "no PERCY_TOKEN in .percy/.env — run setup first"
+  if (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+    die "port $PORT is already in use — stop whatever is serving there (or set APP_PORT and APP_URL), or the suite would snapshot the wrong app"
+  fi
   deploy
   ./node_modules/.bin/http-server .deploy -p "$PORT" -s & local srv=$!
   trap 'kill $srv 2>/dev/null || true' EXIT
