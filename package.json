@@ -1,0 +1,16 @@
+{
+  "name": "example-percy-sdet-suite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Nightly visual regression suite (Playwright + Percy) for the Lumina Home storefront — a sandbox for the Percy Visual Testing Agent's QA triage workflow",
+  "scripts": {
+    "test": "playwright test",
+    "demo": "bash scripts/demo.sh"
+  },
+  "devDependencies": {
+    "@percy/cli": "^1.32.4",
+    "@percy/playwright": "^1.1.1",
+    "@playwright/test": "^1.48.0",
+    "http-server": "^14.1.1"
+  }
+}

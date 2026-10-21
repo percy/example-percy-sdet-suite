@@ -1,0 +1,4 @@
+# Percy Visual Testing Agent — repo config (committed; the plugin's setup workflow maintains it).
+repo_role: regression-suite
+regression_branch: nightly
+app_repos: [percy/example-percy-sdet-app]   # bootstrap rewrites this to YOUR fork
