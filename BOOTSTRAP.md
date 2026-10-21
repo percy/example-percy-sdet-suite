@@ -36,11 +36,12 @@ The first run stops and creates `.percy/.env` with an empty `PERCY_TOKEN=`.
 ## 2. First nightly → baseline
 
 ```bash
-./scripts/demo.sh nightly
-./scripts/demo.sh approve-baseline     # or click Approve on that build in Percy
+./scripts/demo.sh fresh
 ```
 
-The first build *is* the baseline. Once approved, later nightlies get real diffs.
+`fresh` runs the first nightly, waits until Percy has finished processing it, and approves it as the baseline. Approving needs `PERCY_USERNAME` / `PERCY_ACCESS_KEY` in `.percy/.env`. Without them, approve that build in Percy yourself.
+
+Run `fresh` again any time to start over. It puts the app back to its baseline, closes demo issues, and re-baselines.
 
 ## 3. Seed a "mixed morning"
 
@@ -90,5 +91,5 @@ You confirm:
 ```bash
 ./scripts/demo.sh fix-deploy   # hotfix rolled back → next nightly shows prices restored
 ./scripts/demo.sh nightly      # run again WITHOUT fixing → the agent should still list Shop as unresolved
-./scripts/demo.sh reset        # app back to baseline (then: nightly + approve-baseline to re-baseline)
+./scripts/demo.sh fresh        # start over: app back to baseline + Percy re-baselined
 ```

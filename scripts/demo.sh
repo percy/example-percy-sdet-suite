@@ -2,11 +2,12 @@
 # Sandbox driver for the Percy QA-triage demo.
 #
 #   ./scripts/demo.sh setup            fork + clone the app repo, install deps, check your Percy token
-#   ./scripts/demo.sh nightly          "deploy" the app's main branch locally and run the nightly Percy build
-#   ./scripts/demo.sh approve-baseline approve the latest nightly build (needs PERCY_USERNAME / PERCY_ACCESS_KEY)
+#   ./scripts/demo.sh fresh            clean slate: app back to baseline, run a nightly, approve it as the baseline
 #   ./scripts/demo.sh morning          seed a mixed morning: merge 2 app PRs + a bad deploy, then run the nightly
 #   ./scripts/demo.sh fix-deploy       undo the bad deploy, then run the nightly (the "day 2" run)
-#   ./scripts/demo.sh reset            put the app repo back to its baseline and clear demo state
+#   ./scripts/demo.sh nightly          just run a nightly build (waits until Percy has finished processing it)
+#   ./scripts/demo.sh approve-baseline approve the latest nightly build (needs PERCY_USERNAME / PERCY_ACCESS_KEY)
+#   ./scripts/demo.sh reset            put the app repo back to its baseline (use 'fresh' to also re-baseline Percy)
 #
 # Secrets live in .percy/.env (gitignored): PERCY_TOKEN=..., optionally PERCY_USERNAME / PERCY_ACCESS_KEY.
 # Nothing here sends data anywhere except GitHub (your app repo) and Percy (your project).
@@ -26,6 +27,21 @@ die()  { printf '\n✖ %s\n' "$*" >&2; exit 1; }
 load_env() { if [ -f .percy/.env ]; then set -a; . ./.percy/.env; set +a; fi; }
 app_repo() { sed -n 's/^app_repos: *\[\([^],]*\).*/\1/p' .percy/config.yml | tr -d ' "'"'"; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing '$1' — $2"; }
+api() { curl -sS -A "$UA" -H "Authorization: Token token=\"$PERCY_TOKEN\"" "https://percy.io/api/v1$1"; }
+# Prints "<id> <state> <review-state> <ai-ready> <web-url>" for a build JSON on stdin (ai-ready = jobs done + summary settled).
+build_fields() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j=JSON.parse(s).data;if(Array.isArray(j))j=j[0];if(!j){console.log("");return}const a=j.attributes,ai=a["ai-details"]||{};const ready=(ai["all-ai-jobs-completed"]===true&&["ok","skipped"].includes(ai["summary-status"]))||a["total-comparisons-diff"]===0;console.log([j.id,a.state,a["review-state"],ready,a["web-url"]].join(" "))})'; }
+latest_nightly() { api '/builds?filter%5Bbranch%5D=nightly&page%5Blimit%5D=1' | build_fields; }
+wait_finished() { # <build id> — Percy must finish processing (incl. AI) before anything reviews or builds on top of it
+  local f i
+  for i in $(seq 1 60); do
+    f="$(api "/builds/$1" | build_fields)"
+    set -- $f
+    case "$2" in failed|expired) die "build $1 $2 — see Percy";; esac
+    if [ "$2" = "finished" ] && [ "$4" = "true" ]; then echo "  build $1 finished processing"; return 0; fi
+    [ "$i" = 1 ] && printf '  waiting for Percy to finish processing build %s' "$1"; printf '.'; sleep 10
+  done
+  echo; die "build $1 still processing after 10 minutes — check Percy"
+}
 
 cmd_setup() {
   need node "install Node.js 18+ (https://nodejs.org)"
@@ -90,13 +106,17 @@ cmd_nightly() {
     ./node_modules/.bin/percy exec -- ./node_modules/.bin/playwright test --workers=2 2>&1 | tee "$STATE/last-nightly.log" | grep -E 'Finalized build|passed|failed|Error' || true
   kill $srv 2>/dev/null || true; trap - EXIT
   grep -q 'Finalized build' "$STATE/last-nightly.log" || die "the Percy build didn't finalize — see $STATE/last-nightly.log"
+  local bid; bid="$(sed -n 's#.*Finalized build \#[0-9]*: .*/builds/\([0-9]*\).*#\1#p' "$STATE/last-nightly.log" | tail -1)"
+  echo "$bid" > "$STATE/last-build-id"
+  wait_finished "$bid"
 }
 
 cmd_approve_baseline() {
   load_env
   [ -n "${PERCY_USERNAME:-}" ] && [ -n "${PERCY_ACCESS_KEY:-}" ] || die "set PERCY_USERNAME / PERCY_ACCESS_KEY in .percy/.env (BrowserStack → Account → Access key), or approve the build in the Percy dashboard instead"
-  local bid; bid="$(curl -sS -A "$UA" -H "Authorization: Token token=\"$PERCY_TOKEN\"" 'https://percy.io/api/v1/builds?filter%5Bbranch%5D=nightly&page%5Blimit%5D=1' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const b=JSON.parse(s).data[0];console.log(b?b.id:"")})')"
+  local f bid; f="$(latest_nightly)"; bid="${f%% *}"
   [ -n "$bid" ] || die "no nightly build yet — run: ./scripts/demo.sh nightly"
+  wait_finished "$bid"
   local code; code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$PERCY_USERNAME:$PERCY_ACCESS_KEY" -A "$UA" -H 'Content-Type: application/vnd.api+json' -X POST https://percy.io/api/v1/reviews \
     -d "{\"data\":{\"type\":\"reviews\",\"attributes\":{\"action\":\"approve\"},\"relationships\":{\"build\":{\"data\":{\"type\":\"builds\",\"id\":\"$bid\"}}}}}")"
   case "$code" in 201) say "Approved build $bid as the baseline";; 409) die "build $bid isn't finished processing yet — wait a minute and retry";; *) die "approve failed (HTTP $code)";; esac
@@ -104,10 +124,11 @@ cmd_approve_baseline() {
 
 open_and_merge() { # <branch> <title> <body-file>
   local repo="$1" branch="$2" title="$3" body="$4" n
-  git -C "$APP_DIR" push -q origin "$branch"
+  git -C "$APP_DIR" push -q origin "$branch" 2>/dev/null
   n="$(gh pr create -R "$repo" --base main --head "$branch" --title "$title" --body-file "$body" | sed -n 's#.*/pull/\([0-9]*\).*#\1#p')"
   gh pr merge "$n" -R "$repo" --squash --delete-branch >/dev/null
   echo "  merged $repo#$n — $title"
+  echo "https://github.com/$repo/pull/$n|$title" >> "$STATE/merged-prs"
 }
 
 cmd_merge_prs() {
@@ -142,12 +163,31 @@ EOF
 }
 
 cmd_morning() {
+  load_env
+  local f; f="$(latest_nightly)"; set -- $f
+  [ -n "${1:-}" ] || die "no nightly baseline yet — run: ./scripts/demo.sh fresh"
+  [ "$3" = "approved" ] || die "the latest nightly build ($1) is '$3', not approved — tonight's run would diff against an unreviewed build. Run: ./scripts/demo.sh fresh"
+  rm -f "$STATE/merged-prs"
   cmd_merge_prs
   say "Shipping an un-reviewed hotfix straight to the deployed app (no PR)"
   touch "$STATE/bad-deploy"
   cmd_nightly
+  local repo bid; repo="$(app_repo)"; bid="$(cat "$STATE/last-build-id")"
   echo
-  echo "Mixed morning ready. Open your agent in this repo and ask it to triage last night's run (Claude Code or Copilot: /percy-gate)."
+  say "Mixed morning ready. Tabs to open for the demo:"
+  echo "  Last night's run in Percy:  $(api "/builds/$bid" | build_fields | cut -d' ' -f5)"
+  echo "  What the dev team merged:   https://github.com/$repo/pulls?q=is%3Apr+is%3Amerged"
+  while IFS='|' read -r url title; do echo "    $title → $url/files"; done < "$STATE/merged-prs"
+  echo "  (The invisible-prices hotfix is in no PR — that's the point.)"
+  echo
+  echo "Then, in your agent in this repo: /percy-gate"
+}
+
+cmd_fresh() {
+  cmd_reset
+  cmd_nightly
+  cmd_approve_baseline
+  say "Clean slate: app at baseline, Percy baseline approved. Next: ./scripts/demo.sh morning"
 }
 
 cmd_fix_deploy() { rm -f "$STATE/bad-deploy"; say "Hotfix rolled back"; cmd_nightly; }
@@ -156,20 +196,23 @@ cmd_reset() {
   local repo; repo="$(app_repo)"
   say "Resetting $repo main to the baseline tag (force push — this is your demo copy)"
   for n in $(gh pr list -R "$repo" --state open --json number,headRefName -q '.[] | select(.headRefName|startswith("demo/")) | .number'); do gh pr close "$n" -R "$repo" --delete-branch >/dev/null; done
+  for n in $(gh issue list -R "$repo" --state open --label visual-regression --json number -q '.[].number' 2>/dev/null); do gh issue close "$n" -R "$repo" --comment "Closed by demo reset." >/dev/null; done
   git -C "$APP_DIR" fetch -q --tags origin
   git -C "$APP_DIR" checkout -q main && git -C "$APP_DIR" reset -q --hard baseline
   git -C "$APP_DIR" push -q --force origin main
   rm -rf "$STATE" .deploy .percy/triage
-  echo "Done. Percy's baseline still reflects the last approved build: run 'nightly' and approve it to re-baseline."
+  mkdir -p "$STATE"
+  echo "App reset. Percy's baseline still reflects the last approved build — use 'fresh' to reset and re-baseline in one go."
 }
 
 case "${1:-}" in
   setup) cmd_setup ;;
   nightly) cmd_nightly ;;
   approve-baseline) cmd_approve_baseline ;;
+  fresh) cmd_fresh ;;
   merge-prs) cmd_merge_prs ;;
   morning) cmd_morning ;;
   fix-deploy) cmd_fix_deploy ;;
   reset) cmd_reset ;;
-  *) sed -n '2,10p' "$0"; exit 1 ;;
+  *) sed -n '2,11p' "$0"; exit 1 ;;
 esac
