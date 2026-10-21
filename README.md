@@ -18,7 +18,7 @@ gh repo clone percy/example-percy-sdet-suite && cd example-percy-sdet-suite
 ./scripts/demo.sh setup             # forks + clones the app, installs deps, checks your Percy token
 ./scripts/demo.sh nightly           # first nightly run → approve it as the baseline
 ./scripts/demo.sh morning           # merge 2 app PRs + a bad deploy, run the nightly
-# then, in your agent: triage last night's run (Claude Code: /percy:gate · Copilot: /percy-gate)
+# then, in your agent: triage last night's run (Claude Code or Copilot: /percy-gate)
 ```
 
 What you need:

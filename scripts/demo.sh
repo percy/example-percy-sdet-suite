@@ -147,7 +147,7 @@ cmd_morning() {
   touch "$STATE/bad-deploy"
   cmd_nightly
   echo
-  echo "Mixed morning ready. Open your agent in this repo and ask it to triage last night's run (Claude Code: /percy:gate · Copilot: /percy-gate)."
+  echo "Mixed morning ready. Open your agent in this repo and ask it to triage last night's run (Claude Code or Copilot: /percy-gate)."
 }
 
 cmd_fix_deploy() { rm -f "$STATE/bad-deploy"; say "Hotfix rolled back"; cmd_nightly; }

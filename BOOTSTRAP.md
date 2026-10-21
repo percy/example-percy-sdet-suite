@@ -61,7 +61,7 @@ This simulates yesterday:
 /plugin marketplace add percy/percy-visual-testing-agent
 /plugin install percy-visual-testing
 ```
-then `/percy:gate`.
+then `/percy-gate`.
 
 **GitHub Copilot** (VS Code, Agent mode): see [COPILOT.md](COPILOT.md).
 
