@@ -6,10 +6,11 @@
 #   ./scripts/demo.sh morning          seed a mixed morning: merge 2 app PRs + a bad deploy, then run the nightly
 #   ./scripts/demo.sh fix-deploy       undo the bad deploy, then run the nightly (the "day 2" run)
 #   ./scripts/demo.sh nightly          just run a nightly build (waits until Percy has finished processing it)
-#   ./scripts/demo.sh approve-baseline approve the latest nightly build (needs PERCY_USERNAME / PERCY_ACCESS_KEY)
+#   ./scripts/demo.sh approve-baseline approve the latest nightly build (needs BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY)
 #   ./scripts/demo.sh reset            put the app repo back to its baseline (use 'fresh' to also re-baseline Percy)
 #
-# Secrets live in .percy/.env (gitignored): PERCY_TOKEN=..., optionally PERCY_USERNAME / PERCY_ACCESS_KEY.
+# Secrets live in .percy/.env (gitignored): PERCY_TOKEN=... plus your BrowserStack credentials
+# BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY (BrowserStack → Account → Profile) for approving / flagging.
 # Nothing here sends data anywhere except GitHub (your app repo) and Percy (your project).
 set -euo pipefail
 
@@ -24,7 +25,24 @@ mkdir -p "$STATE"
 
 say()  { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 die()  { printf '\n✖ %s\n' "$*" >&2; exit 1; }
-load_env() { if [ -f .percy/.env ]; then set -a; . ./.percy/.env; set +a; fi; }
+load_env() {
+  if [ -f .percy/.env ]; then set -a; . ./.percy/.env; set +a; fi
+  # older names still accepted
+  BROWSERSTACK_USERNAME="${BROWSERSTACK_USERNAME:-${PERCY_USERNAME:-}}"; BROWSERSTACK_ACCESS_KEY="${BROWSERSTACK_ACCESS_KEY:-${PERCY_ACCESS_KEY:-}}"
+}
+# If the BrowserStack credentials are in this shell but not in .percy/.env, write them there (gitignored) so the
+# agent can approve / flag no matter how the IDE was launched.
+save_bs_creds() {
+  grep -q '^BROWSERSTACK_USERNAME=.\+' .percy/.env 2>/dev/null && grep -q '^BROWSERSTACK_ACCESS_KEY=.\+' .percy/.env 2>/dev/null && return 0
+  local u="${BROWSERSTACK_USERNAME:-${PERCY_USERNAME:-}}" k="${BROWSERSTACK_ACCESS_KEY:-${PERCY_ACCESS_KEY:-}}"
+  if [ -n "$u" ] && [ -n "$k" ]; then
+    sed -i.bak '/^#* *BROWSERSTACK_USERNAME=/d;/^#* *BROWSERSTACK_ACCESS_KEY=/d;/^#* *PERCY_USERNAME=/d;/^#* *PERCY_ACCESS_KEY=/d' .percy/.env && rm -f .percy/.env.bak
+    printf 'BROWSERSTACK_USERNAME=%s\nBROWSERSTACK_ACCESS_KEY=%s\n' "$u" "$k" >> .percy/.env
+    echo "  saved your BrowserStack username + access key to .percy/.env (gitignored)"
+  else
+    echo "  note: no BrowserStack credentials in .percy/.env — the agent can triage but not approve/flag. Add BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY (BrowserStack → Account → Profile) to .percy/.env."
+  fi
+}
 app_repo() { sed -n 's/^app_repos: *\[\([^],]*\).*/\1/p' .percy/config.yml | tr -d ' "'"'"; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing '$1' — $2"; }
 api() { curl -sS -A "$UA" -H "Authorization: Token token=\"$PERCY_TOKEN\"" "https://percy.io/api/v1$1"; }
@@ -71,7 +89,7 @@ cmd_setup() {
   if [ -z "${PW_CHANNEL:-}" ]; then ./node_modules/.bin/playwright install chromium >/dev/null; fi
   load_env
   if [ -z "${PERCY_TOKEN:-}" ]; then
-    printf 'PERCY_TOKEN=\n# PERCY_USERNAME=\n# PERCY_ACCESS_KEY=\n' > .percy/.env
+    printf 'PERCY_TOKEN=\n# BROWSERSTACK_USERNAME=\n# BROWSERSTACK_ACCESS_KEY=\n' > .percy/.env
     die "Add your Percy project token to .percy/.env (open the file in your editor; never paste it into chat). Percy → your project → Project settings → Project token (the full-access one)."
   fi
   local code; code="$(curl -sS -o /dev/null -w '%{http_code}' -A "$UA" -H "Authorization: Token token=\"$PERCY_TOKEN\"" 'https://percy.io/api/v1/builds?page%5Blimit%5D=1')"
@@ -113,11 +131,11 @@ cmd_nightly() {
 
 cmd_approve_baseline() {
   load_env
-  [ -n "${PERCY_USERNAME:-}" ] && [ -n "${PERCY_ACCESS_KEY:-}" ] || die "set PERCY_USERNAME / PERCY_ACCESS_KEY in .percy/.env (BrowserStack → Account → Access key), or approve the build in the Percy dashboard instead"
+  [ -n "${BROWSERSTACK_USERNAME:-}" ] && [ -n "${BROWSERSTACK_ACCESS_KEY:-}" ] || die "add BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY (BrowserStack → Account → Profile) to .percy/.env, or approve the build in the Percy dashboard instead"
   local f bid; f="$(latest_nightly)"; bid="${f%% *}"
   [ -n "$bid" ] || die "no nightly build yet — run: ./scripts/demo.sh nightly"
   wait_finished "$bid"
-  local code; code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$PERCY_USERNAME:$PERCY_ACCESS_KEY" -A "$UA" -H 'Content-Type: application/vnd.api+json' -X POST https://percy.io/api/v1/reviews \
+  local code; code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" -A "$UA" -H 'Content-Type: application/vnd.api+json' -X POST https://percy.io/api/v1/reviews \
     -d "{\"data\":{\"type\":\"reviews\",\"attributes\":{\"action\":\"approve\"},\"relationships\":{\"build\":{\"data\":{\"type\":\"builds\",\"id\":\"$bid\"}}}}}")"
   case "$code" in 201) say "Approved build $bid as the baseline";; 409) die "build $bid isn't finished processing yet — wait a minute and retry";; *) die "approve failed (HTTP $code)";; esac
 }
@@ -184,6 +202,7 @@ cmd_morning() {
 }
 
 cmd_fresh() {
+  save_bs_creds
   cmd_reset
   cmd_nightly
   cmd_approve_baseline

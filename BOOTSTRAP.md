@@ -27,7 +27,7 @@ Setup does four things:
 
 The first run stops and creates `.percy/.env` with an empty `PERCY_TOKEN=`.
 
-👤 **Create a Percy web project** (percy.io → New project → Web). Then open `.percy/.env` **in your editor** and paste the project's full-access token from Project settings → Project token. Optionally, add your BrowserStack username and access key (`PERCY_USERNAME=` / `PERCY_ACCESS_KEY=`, from BrowserStack → Account) so approvals can happen from the terminal and the agent. Then re-run:
+👤 **Create a Percy web project** (percy.io → New project → Web). Then open `.percy/.env` **in your editor** and paste the project's full-access token from Project settings → Project token. Optionally, add your BrowserStack username and access key (`BROWSERSTACK_USERNAME=` / `BROWSERSTACK_ACCESS_KEY=`, from BrowserStack → Account → Profile) so approvals can happen from the terminal and the agent. Then re-run:
 
 ```bash
 ./scripts/demo.sh setup
@@ -39,7 +39,7 @@ The first run stops and creates `.percy/.env` with an empty `PERCY_TOKEN=`.
 ./scripts/demo.sh fresh
 ```
 
-`fresh` runs the first nightly, waits until Percy has finished processing it, and approves it as the baseline. Approving needs `PERCY_USERNAME` / `PERCY_ACCESS_KEY` in `.percy/.env`. Without them, approve that build in Percy yourself.
+`fresh` runs the first nightly, waits until Percy has finished processing it, and approves it as the baseline. Approving needs `BROWSERSTACK_USERNAME` / `BROWSERSTACK_ACCESS_KEY` in `.percy/.env`. Without them, approve that build in Percy yourself.
 
 Run `fresh` again any time to start over. It puts the app back to its baseline, closes demo issues, and re-baselines.
 

@@ -16,7 +16,7 @@ Follow **[BOOTSTRAP.md](BOOTSTRAP.md)**. It's written so you can hand it to your
 ```bash
 gh repo clone percy/example-percy-sdet-suite && cd example-percy-sdet-suite
 ./scripts/demo.sh setup             # forks + clones the app, installs deps, checks your Percy token
-./scripts/demo.sh fresh             # first nightly run, approved as the baseline (needs PERCY_USERNAME/ACCESS_KEY, or approve it in Percy)
+./scripts/demo.sh fresh             # first nightly run, approved as the baseline (needs BROWSERSTACK_USERNAME/ACCESS_KEY, or approve it in Percy)
 ./scripts/demo.sh morning           # merge 2 app PRs + a bad deploy, run the nightly
 # then, in your agent: triage last night's run (Claude Code or Copilot: /percy-gate)
 ```
