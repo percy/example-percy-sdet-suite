@@ -14,6 +14,8 @@
 # Nothing here sends data anywhere except GitHub (your app repo) and Percy (your project).
 set -euo pipefail
 
+SHELL_BS_USER="${BROWSERSTACK_USERNAME:-}"; SHELL_BS_KEY="${BROWSERSTACK_ACCESS_KEY:-}"
+SHELL_PERCY_USER="${PERCY_USERNAME:-}"; SHELL_PERCY_KEY="${PERCY_ACCESS_KEY:-}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 APP_DIR="${APP_DIR:-$ROOT/../example-percy-sdet-app}"
@@ -30,24 +32,35 @@ load_env() {
   # older names still accepted
   BROWSERSTACK_USERNAME="${BROWSERSTACK_USERNAME:-${PERCY_USERNAME:-}}"; BROWSERSTACK_ACCESS_KEY="${BROWSERSTACK_ACCESS_KEY:-${PERCY_ACCESS_KEY:-}}"
 }
-# If the BrowserStack credentials are in this shell but not in .percy/.env, write them there (gitignored) so the
-# agent can approve / flag no matter how the IDE was launched.
-save_bs_creds() {
-  grep -q '^BROWSERSTACK_USERNAME=.\+' .percy/.env 2>/dev/null && grep -q '^BROWSERSTACK_ACCESS_KEY=.\+' .percy/.env 2>/dev/null && return 0
-  local u="${BROWSERSTACK_USERNAME:-${PERCY_USERNAME:-}}" k="${BROWSERSTACK_ACCESS_KEY:-${PERCY_ACCESS_KEY:-}}"
-  if [ -n "$u" ] && [ -n "$k" ]; then
-    sed -i.bak '/^#* *BROWSERSTACK_USERNAME=/d;/^#* *BROWSERSTACK_ACCESS_KEY=/d;/^#* *PERCY_USERNAME=/d;/^#* *PERCY_ACCESS_KEY=/d' .percy/.env && rm -f .percy/.env.bak
-    printf 'BROWSERSTACK_USERNAME=%s\nBROWSERSTACK_ACCESS_KEY=%s\n' "$u" "$k" >> .percy/.env
-    echo "  saved your BrowserStack username + access key to .percy/.env (gitignored)"
-  else
-    echo "  note: no BrowserStack credentials in .percy/.env — the agent can triage but not approve/flag. Add BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY (BrowserStack → Account → Profile) to .percy/.env."
-  fi
+# Approving / flagging needs a BrowserStack username + access key that can see THIS Percy project (people often
+# have several BrowserStack accounts). Try the pair in .percy/.env, then the shell's BROWSERSTACK_* and PERCY_*
+# pairs; keep the first that can read the project's latest build, and save it to .percy/.env (gitignored).
+can_see_project() { # <user> <key>
+  local bid; bid="$(api '/builds?page%5Blimit%5D=1' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const b=JSON.parse(s).data[0];console.log(b?b.id:"")})')"
+  [ -n "$bid" ] || return 0   # no builds yet: nothing to check against
+  [ "$(curl -sS -o /dev/null -w '%{http_code}' -u "$1:$2" -A "$UA" "https://percy.io/api/v1/builds/$bid")" = "200" ]
 }
-app_repo() { sed -n 's/^app_repos: *\[\([^],]*\).*/\1/p' .percy/config.yml | tr -d ' "'"'"; }
+save_bs_creds() {
+  local fu fk; fu="$(sed -n 's/^BROWSERSTACK_USERNAME=//p' .percy/.env 2>/dev/null)"; fk="$(sed -n 's/^BROWSERSTACK_ACCESS_KEY=//p' .percy/.env 2>/dev/null)"
+  if [ -n "$fu" ] && [ -n "$fk" ] && can_see_project "$fu" "$fk"; then echo "  BrowserStack credentials in .percy/.env: OK for this Percy project"; return 0; fi
+  local u k pair
+  for pair in "${SHELL_BS_USER:-}|${SHELL_BS_KEY:-}" "${SHELL_PERCY_USER:-}|${SHELL_PERCY_KEY:-}"; do
+    u="${pair%%|*}"; k="${pair#*|}"
+    [ -n "$u" ] && [ -n "$k" ] || continue
+    if can_see_project "$u" "$k"; then
+      sed -i.bak '/^#* *BROWSERSTACK_USERNAME=/d;/^#* *BROWSERSTACK_ACCESS_KEY=/d;/^#* *PERCY_USERNAME=/d;/^#* *PERCY_ACCESS_KEY=/d' .percy/.env && rm -f .percy/.env.bak
+      printf 'BROWSERSTACK_USERNAME=%s\nBROWSERSTACK_ACCESS_KEY=%s\n' "$u" "$k" >> .percy/.env
+      echo "  saved BrowserStack credentials that can see this Percy project to .percy/.env (gitignored)"
+      return 0
+    fi
+  done
+  die "none of your BrowserStack credentials can see this Percy project, so approving/flagging would fail. Put the username + access key of an account in the project's Percy organization into .percy/.env as BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY."
+}
 need() { command -v "$1" >/dev/null 2>&1 || die "missing '$1' — $2"; }
+app_repo() { sed -n 's/^app_repos: *\[\([^],]*\).*/\1/p' .percy/config.yml | tr -d ' "'"'"; }
 api() { curl -sS -A "$UA" -H "Authorization: Token token=\"$PERCY_TOKEN\"" "https://percy.io/api/v1$1"; }
-# Prints "<id> <state> <review-state> <ai-ready> <web-url>" for a build JSON on stdin (ai-ready = jobs done + summary settled).
-build_fields() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j=JSON.parse(s).data;if(Array.isArray(j))j=j[0];if(!j){console.log("");return}const a=j.attributes,ai=a["ai-details"]||{};const ready=(ai["all-ai-jobs-completed"]===true&&["ok","skipped"].includes(ai["summary-status"]))||a["total-comparisons-diff"]===0;console.log([j.id,a.state,a["review-state"],ready,a["web-url"]].join(" "))})'; }
+# Prints "<id> <state> <review-state> <ai-ready> <web-url>" for a build JSON on stdin (ai-ready = all AI jobs done; the cluster summary can lag and is not needed).
+build_fields() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j=JSON.parse(s).data;if(Array.isArray(j))j=j[0];if(!j){console.log("");return}const a=j.attributes,ai=a["ai-details"]||{};const ready=ai["all-ai-jobs-completed"]===true||a["total-comparisons-diff"]===0;console.log([j.id,a.state,a["review-state"],ready,a["web-url"]].join(" "))})'; }
 latest_nightly() { api '/builds?filter%5Bbranch%5D=nightly&page%5Blimit%5D=1' | build_fields; }
 wait_finished() { # <build id> — Percy must finish processing (incl. AI) before anything reviews or builds on top of it
   local f i
@@ -135,9 +148,22 @@ cmd_approve_baseline() {
   local f bid; f="$(latest_nightly)"; bid="${f%% *}"
   [ -n "$bid" ] || die "no nightly build yet — run: ./scripts/demo.sh nightly"
   wait_finished "$bid"
-  local code; code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" -A "$UA" -H 'Content-Type: application/vnd.api+json' -X POST https://percy.io/api/v1/reviews \
-    -d "{\"data\":{\"type\":\"reviews\",\"attributes\":{\"action\":\"approve\"},\"relationships\":{\"build\":{\"data\":{\"type\":\"builds\",\"id\":\"$bid\"}}}}}")"
-  case "$code" in 201) say "Approved build $bid as the baseline";; 409) die "build $bid isn't finished processing yet — wait a minute and retry";; *) die "approve failed (HTTP $code)";; esac
+  set -- $(api "/builds/$bid" | build_fields)
+  if [ "${3:-}" = "approved" ]; then say "Build $bid is already approved (Percy auto-approves a run with no changes) — it's the baseline"; return 0; fi
+  local code i
+  for i in 1 2 3 4 5 6 7 8 9; do   # Percy briefly answers 409 "Can only review finished builds" right after a build finishes
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" -A "$UA" -H 'Content-Type: application/vnd.api+json' -X POST https://percy.io/api/v1/reviews \
+      -d "{\"data\":{\"type\":\"reviews\",\"attributes\":{\"action\":\"approve\"},\"relationships\":{\"build\":{\"data\":{\"type\":\"builds\",\"id\":\"$bid\"}}}}}")"
+    [ "$code" = "409" ] || break
+    set -- $(api "/builds/$bid" | build_fields); [ "${3:-}" = "approved" ] && { code=201; break; }
+    sleep 10
+  done
+  case "$code" in
+    201) say "Approved build $bid as the baseline";;
+    401|403) die "approve refused (HTTP $code): these BrowserStack credentials can't review this Percy project — check BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY in .percy/.env";;
+    409) die "Percy still won't accept a review for build $bid (HTTP 409) — approve it in the Percy dashboard";;
+    *) die "approve failed (HTTP $code)";;
+  esac
 }
 
 open_and_merge() { # <branch> <title> <body-file>
@@ -202,7 +228,9 @@ cmd_morning() {
 }
 
 cmd_fresh() {
-  save_bs_creds
+  load_env; [ -n "${PERCY_TOKEN:-}" ] || die "no PERCY_TOKEN in .percy/.env — run setup first"
+  save_bs_creds          # checked BEFORE anything is reset, so a bad pair can't leave a half-done state
+  load_env
   cmd_reset
   cmd_nightly
   cmd_approve_baseline
