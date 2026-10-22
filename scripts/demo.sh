@@ -90,7 +90,10 @@ cmd_setup() {
     for i in 1 2 3 4 5 6; do gh repo view "$repo" >/dev/null 2>&1 && break; sleep 5; done
     gh repo view "$repo" >/dev/null 2>&1 || die "fork $repo not visible yet — re-run setup in a minute"
     sed -i.bak "s#^app_repos: .*#app_repos: [$repo]   # your fork — the triage reads PRs merged here#" .percy/config.yml && rm -f .percy/config.yml.bak
+    # Forks start with Issues turned off — the triage files its bug report as an issue here.
+    gh repo edit "$repo" --enable-issues >/dev/null 2>&1 || echo "  note: couldn't enable Issues on $repo — turn them on in its Settings to let the agent file bugs there"
   fi
+  gh label create visual-regression -R "$repo" --color D93F0B --description "Filed by the Percy Visual Testing Agent's QA triage" >/dev/null 2>&1 || true
   if [ ! -d "$APP_DIR/.git" ]; then
     say "Cloning $repo → $APP_DIR"
     gh repo clone "$repo" "$APP_DIR" -- -q
