@@ -86,6 +86,17 @@ You confirm:
 2. flag the Shop snapshot (*changes requested*)
 3. on the first run, tell it how your team reports bugs (or "don't report")
 
+## 4b. Variant: central QA team without access to the app's code
+
+Some QA teams test vendors' apps and can't read their repos. To try that shape:
+
+```bash
+./scripts/demo.sh mode no-access     # hides the app repo from the agent
+./scripts/demo.sh fresh && ./scripts/demo.sh morning
+```
+
+`morning` also writes the vendor's release notes to `.demo-state/release-notes.md`. When `/percy-gate` asks for release notes, give that path; it explains the design changes from them, and Shop's missing prices are still an anomaly, because they're in no release note. Or skip the notes: the triage then uses Percy's AI alone and groups the design changes as "looks deliberate — approve if it was in the release". `./scripts/demo.sh mode repos` switches back.
+
 ## 5. Day 2 (optional) and reset
 
 ```bash
