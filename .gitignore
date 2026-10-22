@@ -7,3 +7,4 @@ playwright-report/
 .percy/intent-*
 .deploy/
 .demo-state/
+.demo-app-repo

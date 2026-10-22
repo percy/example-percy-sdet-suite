@@ -2,7 +2,3 @@
 repo_role: regression-suite
 regression_branch: nightly
 app_repos: [percy/example-percy-sdet-app]   # bootstrap rewrites this to YOUR fork
-reporting:
-  route: github-issue
-  github: { repo: percy/example-percy-sdet-app, labels: [visual-regression] }
-  saved_by_choice: repo

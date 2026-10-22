@@ -8,6 +8,8 @@
 #   ./scripts/demo.sh nightly          just run a nightly build (waits until Percy has finished processing it)
 #   ./scripts/demo.sh approve-baseline approve the latest nightly build (needs BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY)
 #   ./scripts/demo.sh reset            put the app repo back to its baseline (use 'fresh' to also re-baseline Percy)
+#   ./scripts/demo.sh mode no-access   pretend QA can't read the app's code (central QA team): Percy AI + release notes only
+#   ./scripts/demo.sh mode repos       back to normal: the triage reads the app's merged PRs
 #
 # Secrets live in .percy/.env (gitignored): PERCY_TOKEN=... plus your BrowserStack credentials
 # BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY (BrowserStack → Account → Profile) for approving / flagging.
@@ -57,7 +59,11 @@ save_bs_creds() {
   die "none of your BrowserStack credentials can see this Percy project, so approving/flagging would fail. Put the username + access key of an account in the project's Percy organization into .percy/.env as BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY."
 }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing '$1' — $2"; }
-app_repo() { sed -n 's/^app_repos: *\[\([^],]*\).*/\1/p' .percy/config.yml | tr -d ' "'"'"; }
+# The app repo the demo merges PRs into. In 'no-access' mode the config hides it from the agent, so remember it here.
+app_repo() {
+  local r; r="$(sed -n 's/^app_repos: *\[\([^],]*\).*/\1/p' .percy/config.yml | tr -d ' "'"'")"
+  if [ -n "$r" ]; then echo "$r"; elif [ -f .demo-app-repo ]; then cat .demo-app-repo; else echo "$UPSTREAM_APP"; fi
+}
 api() { curl -sS -A "$UA" -H "Authorization: Token token=\"$PERCY_TOKEN\"" "https://percy.io/api/v1$1"; }
 # Prints "<id> <state> <review-state> <ai-ready> <web-url>" for a build JSON on stdin (ai-ready = all AI jobs done; the cluster summary can lag and is not needed).
 build_fields() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j=JSON.parse(s).data;if(Array.isArray(j))j=j[0];if(!j){console.log("");return}const a=j.attributes,ai=a["ai-details"]||{};const ready=ai["all-ai-jobs-completed"]===true||a["total-comparisons-diff"]===0;console.log([j.id,a.state,a["review-state"],ready,a["web-url"]].join(" "))})'; }
@@ -216,6 +222,13 @@ cmd_morning() {
   [ "$3" = "approved" ] || die "the latest nightly build ($1) is '$3', not approved — tonight's run would diff against an unreviewed build. Run: ./scripts/demo.sh fresh"
   rm -f "$STATE/merged-prs"
   cmd_merge_prs
+  # What the vendor's release notes say about yesterday's release (used in no-access mode). The hotfix isn't in them.
+  cat > "$STATE/release-notes.md" <<'EOF'
+# Lumina Home — release notes (vendor)
+
+- **Brand refresh:** primary buttons — the hero call to action, "Add to cart" and checkout — now use the new teal brand colour.
+- **Footer:** updated brand tagline ("made to last").
+EOF
   say "Shipping an un-reviewed hotfix straight to the deployed app (no PR)"
   touch "$STATE/bad-deploy"
   cmd_nightly
@@ -226,6 +239,7 @@ cmd_morning() {
   echo "  What the dev team merged:   https://github.com/$repo/pulls?q=is%3Apr+is%3Amerged"
   while IFS='|' read -r url title; do echo "    $title → $url/files"; done < "$STATE/merged-prs"
   echo "  (The invisible-prices hotfix is in no PR — that's the point.)"
+  grep -q '^change_context: percy-only' .percy/config.yml && echo "  No-access mode — the vendor's release notes: $STATE/release-notes.md"
   echo
   echo "Then, in your agent in this repo: /percy-gate"
 }
@@ -240,6 +254,22 @@ cmd_fresh() {
   say "Clean slate: app at baseline, Percy baseline approved. Next: ./scripts/demo.sh morning"
 }
 
+cmd_mode() {
+  case "${1:-}" in
+    no-access)
+      app_repo > .demo-app-repo
+      sed -i.bak '/^change_context:/d;/^change_sources:/d;s|^app_repos: .*|app_repos: []   # this QA team cannot read the app code|' .percy/config.yml && rm -f .percy/config.yml.bak
+      printf 'change_context: percy-only\nchange_sources: [release-notes]\n' >> .percy/config.yml
+      say "No-access mode: the agent can't see the app's PRs. It triages from Percy's AI, history and the vendor's release notes."
+      echo "  (the vendor's release notes for each morning are written to .demo-state/release-notes.md)";;
+    repos)
+      local r; r="$(app_repo)"
+      sed -i.bak "/^change_context:/d;/^change_sources:/d;s|^app_repos: .*|app_repos: [$r]|" .percy/config.yml && rm -f .percy/config.yml.bak
+      say "Repo mode: the triage reads PRs merged into $r";;
+    *) die "usage: ./scripts/demo.sh mode no-access|repos";;
+  esac
+}
+
 cmd_fix_deploy() { rm -f "$STATE/bad-deploy"; say "Hotfix rolled back"; cmd_nightly; }
 
 cmd_reset() {
@@ -251,6 +281,9 @@ cmd_reset() {
   git -C "$APP_DIR" checkout -q main && git -C "$APP_DIR" reset -q --hard baseline
   git -C "$APP_DIR" push -q --force origin main
   rm -rf "$STATE" .deploy .percy/triage
+  # forget the bug-reporting route the agent saved, so each take shows the first-run question again
+  node -e 'const fs=require("fs");const f=".percy/config.yml";const t=fs.readFileSync(f,"utf8").split("\n");const o=[];let skip=false;for(const l of t){if(/^reporting:/.test(l)){skip=true;continue}if(skip&&/^\s/.test(l))continue;skip=false;o.push(l)}fs.writeFileSync(f,o.join("\n"))'
+
   mkdir -p "$STATE"
   echo "App reset. Percy's baseline still reflects the last approved build — use 'fresh' to reset and re-baseline in one go."
 }
@@ -260,6 +293,7 @@ case "${1:-}" in
   nightly) cmd_nightly ;;
   approve-baseline) cmd_approve_baseline ;;
   fresh) cmd_fresh ;;
+  mode) cmd_mode "${2:-}" ;;
   merge-prs) cmd_merge_prs ;;
   morning) cmd_morning ;;
   fix-deploy) cmd_fix_deploy ;;
