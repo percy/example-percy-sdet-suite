@@ -10,6 +10,8 @@
 #   ./scripts/demo.sh reset            put the app repo back to its baseline (use 'fresh' to also re-baseline Percy)
 #   ./scripts/demo.sh mode no-access   pretend QA can't read the app's code (central QA team): Percy AI + release notes only
 #   ./scripts/demo.sh mode percy-only  no code access AND no release notes: Percy's AI and snapshot history only
+#   ./scripts/demo.sh unsetup          remove only the plugin's setup (its config + AGENTS.md section) so /percy-setup can be
+#                                      shown live; Percy's own integration is untouched. Undo: git checkout .percy/config.yml AGENTS.md
 #   ./scripts/demo.sh mode repos       back to normal: the triage reads the app's merged PRs
 #
 # Secrets live in .percy/.env (gitignored): PERCY_TOKEN=... plus your BrowserStack credentials
@@ -240,7 +242,7 @@ EOF
   echo "  What the dev team merged:   https://github.com/$repo/pulls?q=is%3Apr+is%3Amerged"
   while IFS='|' read -r url title; do echo "    $title → $url/files"; done < "$STATE/merged-prs"
   echo "  (The invisible-prices hotfix is in no PR — that's the point.)"
-  grep -q '^change_context: percy-only' .percy/config.yml && echo "  No-access mode — the vendor's release notes: $STATE/release-notes.md"
+  grep -q '^change_sources: \[release-notes' .percy/config.yml && echo "  No-access mode — the vendor's release notes: $STATE/release-notes.md"
   echo
   echo "Then, in your agent in this repo: /percy-gate"
 }
@@ -276,6 +278,14 @@ cmd_mode() {
   esac
 }
 
+cmd_unsetup() {
+  [ -f .percy/config.yml ] && app_repo > .demo-app-repo && cp .percy/config.yml "$STATE/config.before-unsetup.yml"
+  rm -f .percy/config.yml
+  node -e 'const fs=require("fs");const f="AGENTS.md";const t=fs.readFileSync(f,"utf8");const i=t.indexOf("## Visual review (Percy)");if(i>=0)fs.writeFileSync(f,t.slice(0,i).trimEnd()+"\n")'
+  say "Removed the plugin's setup (its .percy/config.yml and the AGENTS.md section). Percy itself is untouched."
+  echo "  Now, in your agent: /percy-setup   (undo without the agent: git checkout .percy/config.yml AGENTS.md)"
+}
+
 cmd_fix_deploy() { rm -f "$STATE/bad-deploy"; say "Hotfix rolled back"; cmd_nightly; }
 
 cmd_reset() {
@@ -300,6 +310,7 @@ case "${1:-}" in
   approve-baseline) cmd_approve_baseline ;;
   fresh) cmd_fresh ;;
   mode) cmd_mode "${2:-}" ;;
+  unsetup) cmd_unsetup ;;
   merge-prs) cmd_merge_prs ;;
   morning) cmd_morning ;;
   fix-deploy) cmd_fix_deploy ;;
