@@ -9,6 +9,7 @@
 #   ./scripts/demo.sh approve-baseline approve the latest nightly build (needs BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY)
 #   ./scripts/demo.sh reset            put the app repo back to its baseline (use 'fresh' to also re-baseline Percy)
 #   ./scripts/demo.sh mode no-access   pretend QA can't read the app's code (central QA team): Percy AI + release notes only
+#   ./scripts/demo.sh mode percy-only  no code access AND no release notes: Percy's AI and snapshot history only
 #   ./scripts/demo.sh mode repos       back to normal: the triage reads the app's merged PRs
 #
 # Secrets live in .percy/.env (gitignored): PERCY_TOKEN=... plus your BrowserStack credentials
@@ -262,11 +263,16 @@ cmd_mode() {
       printf 'change_context: percy-only\nchange_sources: [release-notes]\n' >> .percy/config.yml
       say "No-access mode: the agent can't see the app's PRs. It triages from Percy's AI, history and the vendor's release notes."
       echo "  (the vendor's release notes for each morning are written to .demo-state/release-notes.md)";;
+    percy-only)
+      app_repo > .demo-app-repo
+      sed -i.bak '/^change_context:/d;/^change_sources:/d;s|^app_repos: .*|app_repos: []   # this QA team cannot read the app code|' .percy/config.yml && rm -f .percy/config.yml.bak
+      printf 'change_context: percy-only\nchange_sources: []   # no release notes or Jira either\n' >> .percy/config.yml
+      say "Percy-only mode: no app code, no release notes. The agent triages from Percy's AI and snapshot history alone.";;
     repos)
       local r; r="$(app_repo)"
       sed -i.bak "/^change_context:/d;/^change_sources:/d;s|^app_repos: .*|app_repos: [$r]|" .percy/config.yml && rm -f .percy/config.yml.bak
       say "Repo mode: the triage reads PRs merged into $r";;
-    *) die "usage: ./scripts/demo.sh mode no-access|repos";;
+    *) die "usage: ./scripts/demo.sh mode repos|no-access|percy-only";;
   esac
 }
 
